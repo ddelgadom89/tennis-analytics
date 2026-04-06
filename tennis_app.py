@@ -9,26 +9,34 @@ st.set_page_config(page_title="Pro Tennis Analytics", layout="wide")
 # --- MOTOR DE SCRAPING UNIVERSAL ---
 @st.cache_data(ttl=3600)
 def get_abstract_data(url, table_id='reportable'):
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    # Header profesional para evitar bloqueos de seguridad (403 Forbidden)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        tables = pd.read_html(response.text, attrs={'id': table_id})
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status() 
+        
+        # Se especifica 'lxml' para procesar el HTML de forma más estable
+        tables = pd.read_html(response.text, attrs={'id': table_id}, flavor='lxml')
         if not tables: return pd.DataFrame()
         df = tables[0]
         
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(-1)
         
-        # Limpieza profunda de cabeceras
+        # Limpieza de nombres de columnas
         df.columns = [str(c).replace('\xa0', ' ').replace('\n', '').strip() for c in df.columns]
         
+        # Conversión de tipos de datos
         keywords = ['%', 'Pt', 'Elo', 'Age', 'Rank', 'Wnr', 'UFE', 'Ace', 'DF', '1st', '2nd', 'Hold', 'Ret', 'Brk', 'Won', 'Length', 'Matches']
         for col in df.columns:
             if any(x in str(col) for x in keywords):
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace('%', ''), errors='coerce')
         return df
     except Exception as e:
-        st.error(f"Error fetching data: {e}")
+        st.error(f"Error técnico al obtener datos: {e}")
         return pd.DataFrame()
 
 # --- BARRA LATERAL ---
@@ -49,7 +57,8 @@ def filter_by_matches(df, threshold):
 with st.spinner('Synchronizing Global Databases...'):
     elo_frames = []
     for t in selected_tours:
-        tmp_df = get_abstract_data(f"http://tennisabstract.com/reports/{t.lower()}_elo_ratings.html")
+        # Uso de HTTPS obligatorio para despliegue público
+        tmp_df = get_abstract_data(f"https://tennisabstract.com/reports/{t.lower()}_elo_ratings.html")
         if not tmp_df.empty:
             tmp_df['Tour'] = t
             elo_frames.append(tmp_df)
@@ -62,7 +71,7 @@ if not df_elo_raw.empty:
     elo_rank_col = next((c for c in all_cols if 'elo' in c.lower() and 'rank' in c.lower()), None)
     df_elo['Rank_Diff'] = df_elo[off_rank_col] - df_elo[elo_rank_col] if off_rank_col and elo_rank_col else 0
 
-# --- FUNCIÓN PARA SCATTERS ---
+# --- FUNCIÓN PARA GRÁFICOS ---
 def draw_smart_scatter(df, x, y, color_col, title):
     fig = px.scatter(
         df, x=x, y=y, text="Player", color=color_col,
@@ -157,26 +166,23 @@ with tab7:
     st.header("📖 Intelligence Glossary")
     st.markdown("""
     ### 📊 Ranking & Elo Metrics
-    * **Elo Rating:** A skill measurement where defeating a strong opponent grants more points than defeating a weak one.
-    * **hElo / cElo / gElo:** Elo ratings specifically for Hard, Clay, and Grass courts.
-    * **Rank_Diff:** The difference between official ATP/WTA ranking and Elo ranking. 
-        * *Positive:* Player is playing better than their official rank suggests (Underestimated).
-        * *Negative:* Official rank is higher than their current performance (Overestimated).
+    * **Elo Rating:** Medida de habilidad relativa. Ganar a un rival fuerte da más puntos que ganar a uno débil.
+    * **hElo / cElo / gElo:** Calificaciones Elo específicas para Hard (Dura), Clay (Tierra) y Grass (Hierba).
+    * **Rank_Diff:** Diferencia entre el ranking oficial ATP/WTA y el ranking Elo. 
+        * *Positivo:* El jugador rinde mejor de lo que dice su ranking (Subestimado).
+        * *Negativo:* El ranking oficial es superior a su rendimiento actual (Sobreestimado).
 
     ### 🔥 Aggression Metrics
-    * **Wnr/Pt:** Winners hit per point played. High values indicate an aggressive style.
-    * **UFE/Pt:** Unforced Errors per point played. High values indicate high-risk play or lack of consistency.
-    * **Ratio:** Winners divided by Unforced Errors. A value > 1.0 means the player hits more winners than mistakes.
+    * **Wnr/Pt:** Winners por cada punto jugado. Indica agresividad.
+    * **UFE/Pt:** Errores no forzados por cada punto jugado. Indica riesgo o falta de consistencia.
+    * **Ratio:** Winners divididos por Errores No Forzados. > 1.0 es positivo.
 
     ### ⚡ Service & Return Metrics
-    * **Ace%:** Percentage of service points that are aces.
-    * **Hold%:** Percentage of service games won.
-    * **Break%:** Percentage of return games where the player breaks the opponent's serve.
-    * **RiP% (Return in Play):** Percentage of returns successfully put into play.
+    * **Ace%:** Porcentaje de puntos de saque que son aces.
+    * **Hold%:** Porcentaje de juegos de saque ganados.
+    * **Break%:** Porcentaje de juegos al resto donde se rompe el saque rival.
 
     ### 🏃 Rally Metrics
-    * **RallyLen:** Average number of shots per rally.
-    * **1-3 W%:** Win percentage in short rallies (under 4 shots).
-    * **4-6 W% / 7-9 W%:** Win percentage in medium-length rallies.
-    * **10+ W%:** Win percentage in long, endurance rallies.
+    * **RallyLen:** Promedio de golpes por intercambio.
+    * **1-3 W% / 10+ W%:** Probabilidad de ganar el punto en intercambios cortos vs largos.
     """)
